@@ -10,9 +10,9 @@ RUN npm install
 COPY index.js .
 
 # Expõe a porta
-EXPOSE 3000
+EXPOSE 3333
 
 # Variável de ambiente padrão (pode ser sobrescrita no Coolify)
-ENV PORT=3000
+ENV PORT=3333
 
 CMD ["npm", "start"]
