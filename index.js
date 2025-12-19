@@ -5,32 +5,33 @@ import cors from 'cors';
 import pg from 'pg';
 import { z } from 'zod';
 
-// Configuração do Servidor Web
 const app = express();
 app.use(cors());
 
+// Variável para armazenar o transporte ativo.
+// Nota: Em um ambiente multi-usuário real, isso deveria ser um Map<sessionId, transport>
+let transport;
+
 // Conexão com o Postgres
-// O Coolify deve injetar a variável DATABASE_URL
 const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
 });
 
-// Teste de conexão ao iniciar
+// Teste de conexão
 pool.connect()
   .then(() => console.log('✅ Conectado ao PostgreSQL com sucesso'))
   .catch(err => console.error('❌ Erro ao conectar no PostgreSQL:', err));
 
-// Configuração do Servidor MCP
 const server = new McpServer({
-  name: "Postgres MCP via Coolify",
+  name: "Postgres MCP",
   version: "1.0.0"
 });
 
-// --- FERRAMENTA 1: Listar Tabelas (Schema) ---
-// Ajuda a IA a entender a estrutura do banco
+// --- FERRAMENTAS (Mantive as mesmas) ---
+
 server.tool(
   "list_tables",
-  {}, // Sem argumentos
+  {},
   async () => {
     try {
       const result = await pool.query(`
@@ -43,59 +44,55 @@ server.tool(
         content: [{ type: "text", text: `Tabelas encontradas: ${tables}` }]
       };
     } catch (error) {
-      return {
-        isError: true,
-        content: [{ type: "text", text: `Erro ao listar tabelas: ${error.message}` }]
-      };
+      return { isError: true, content: [{ type: "text", text: `Erro: ${error.message}` }] };
     }
   }
 );
 
-// --- FERRAMENTA 2: Executar Query SQL ---
-// Permite que a IA faça perguntas ao banco
 server.tool(
   "query_database",
   {
-    sql: z.string().describe("A query SQL completa para executar. Ex: SELECT * FROM users LIMIT 5")
+    sql: z.string().describe("A query SQL completa para executar.")
   },
   async ({ sql }) => {
-    // Bloqueio de segurança simples para evitar comandos muito destrutivos
-    // Remova se quiser controle total
+    // Bloqueio de segurança simples
     if (/drop|truncate|alter/i.test(sql)) {
-       return {
-         isError: true,
-         content: [{ type: "text", text: "Comandos DDL (DROP, TRUNCATE) não são permitidos por segurança." }]
-       };
+       return { isError: true, content: [{ type: "text", text: "Comandos DDL não permitidos." }] };
     }
-
     try {
       const result = await pool.query(sql);
       return {
         content: [{ type: "text", text: JSON.stringify(result.rows, null, 2) }]
       };
     } catch (error) {
-      return {
-        isError: true,
-        content: [{ type: "text", text: `Erro na Query: ${error.message}` }]
-      };
+      return { isError: true, content: [{ type: "text", text: `Erro SQL: ${error.message}` }] };
     }
   }
 );
 
-// --- ENDPOINTS SSE (Para o Open WebUI) ---
+// --- CORREÇÃO AQUI ---
 
-// Endpoint para iniciar a conexão
+// 1. Endpoint que inicia a conexão (GET)
 app.get('/sse', async (req, res) => {
-  console.log("Nova conexão SSE do Open WebUI");
-  const transport = new SSEServerTransport('/messages', res);
+  console.log("Nova conexão SSE estabelecida");
+  
+  // Criamos o transporte e salvamos na variável global
+  transport = new SSEServerTransport('/messages', res);
   await server.connect(transport);
 });
 
-// Endpoint para receber as mensagens
+// 2. Endpoint que recebe as mensagens (POST)
 app.post('/messages', async (req, res) => {
-  await server.processMessage(req, res);
+  if (!transport) {
+    res.status(500).send("Conexão SSE não inicializada");
+    return;
+  }
+  
+  // O transporte trata a mensagem, não o server diretamente
+  await transport.handlePostMessage(req, res);
 });
 
+// Usa a porta do ambiente ou 3000 (Se você configurou 3333 no env, ele usará 3333)
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 MCP Postgres Server rodando na porta ${PORT}`);
